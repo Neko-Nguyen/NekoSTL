@@ -1,0 +1,14 @@
+build/
+build-*/
+compile_commands.json
+.cache/
+*.o
+*.gcda
+*.gcno
+
+# Editor config: share the settings that make the project build correctly,
+# keep personal preferences and local paths out.
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/extensions.json
+!.vscode/tasks.json

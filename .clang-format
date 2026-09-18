@@ -1,0 +1,49 @@
+# Matches the style already in the tree: 4-space indent, 80 columns (the ===
+# banner rules are drawn to 78), `T* p` not `T *p`, braces attached.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# `private:` / `public:` sit flush with `class`, not indented with the members.
+AccessModifierOffset: -4
+# `namespace neko {` does not indent its contents.
+NamespaceIndentation: None
+CompactNamespaces: false
+FixNamespaceComments: true
+
+# `T* begin_;` and `const T& value` -- bound to the type.
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+
+# One-line accessors like `T* data() { return begin_; }` stay on one line.
+AllowShortFunctionsOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: false
+
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: NextLine
+AlwaysBreakTemplateDeclarations: Yes
+
+# Off on purpose: turning it on re-aligns every run of assignments in the tree
+# (`a     = neko::move(b);` in swap), which costs more than it buys. The price
+# is that the hand-aligned neko::exchange blocks in vector.hpp get unaligned.
+AlignConsecutiveAssignments: None
+AlignTrailingComments: true
+AlignAfterOpenBracket: Align
+AlignOperands: Align
+
+SpaceAfterTemplateKeyword: true
+SpacesBeforeTrailingComments: 2
+Cpp11BracedListStyle: true
+IndentPPDirectives: None
+SortIncludes: Never
