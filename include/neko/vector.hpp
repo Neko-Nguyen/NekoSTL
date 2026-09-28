@@ -19,9 +19,7 @@ template <typename T>
 class vector {
 public:
     // The container contract. Generic code names these -- `typename
-    // C::value_type` is the only way to ask a container what it holds. The code
-    // below uses the concrete types directly; these exist to be read from the
-    // outside.
+    // C::value_type` is the only way to ask a container what it holds.
     using value_type = T;
     using size_type = std::size_t;
     using difference_type = std::ptrdiff_t;
@@ -35,7 +33,7 @@ public:
     // --- construction / destruction ----------------------------------------
     vector() = default;
 
-    explicit vector(std::size_t count) {
+    explicit vector(size_type count) {
         init(count);
         try {
             for (; end_ != cap_; ++end_) ::new (static_cast<void*>(end_)) T();
@@ -44,7 +42,7 @@ public:
             throw;
         }
     }
-    vector(std::size_t count, const T& value) {
+    vector(size_type count, const_reference value) {
         init(count);
         try {
             for (; end_ != cap_; ++end_)
@@ -91,56 +89,56 @@ public:
     ~vector() { tidy(); }
 
     // --- capacity -----------------------------------------------------------
-    std::size_t size() const noexcept { return end_ - begin_; }
-    std::size_t capacity() const noexcept { return cap_ - begin_; }
+    size_type size() const noexcept { return end_ - begin_; }
+    size_type capacity() const noexcept { return cap_ - begin_; }
     [[nodiscard]] bool empty() const noexcept { return size() == 0; }
 
-    void reserve(std::size_t new_cap) {
+    void reserve(size_type new_cap) {
         if (new_cap <= capacity()) return;
         reallocate(new_cap);
     }
     void shrink_to_fit() { reallocate(size()); }
 
     // --- element access -----------------------------------------------------
-    T& operator[](std::size_t i) { return *(begin_ + i); }
-    const T& operator[](std::size_t i) const { return *(begin_ + i); }
-    T& at(std::size_t i) {
+    reference operator[](size_type i) { return *(begin_ + i); }
+    const_reference operator[](size_type i) const { return *(begin_ + i); }
+    reference at(size_type i) {
         if (i >= size()) throw std::out_of_range("neko::vector::at");
         return *(begin_ + i);
     }
-    const T& at(std::size_t i) const {
+    const_reference at(size_type i) const {
         if (i >= size()) throw std::out_of_range("neko::vector::at");
         return *(begin_ + i);
     }
 
-    T& front() { return *begin_; }
-    const T& front() const { return *begin_; }
-    T& back() { return *(end_ - 1); }
-    const T& back() const { return *(end_ - 1); }
+    reference front() { return *begin_; }
+    const_reference front() const { return *begin_; }
+    reference back() { return *(end_ - 1); }
+    const_reference back() const { return *(end_ - 1); }
 
-    T* data() noexcept { return begin_; }
-    const T* data() const noexcept { return begin_; }
+    pointer data() noexcept { return begin_; }
+    const_pointer data() const noexcept { return begin_; }
 
     // --- iterators ----------------------------------------------------------
-    T* begin() noexcept { return begin_; }
-    const T* begin() const noexcept { return begin_; }
-    T* end() noexcept { return end_; }
-    const T* end() const noexcept { return end_; }
+    iterator begin() noexcept { return begin_; }
+    const_iterator begin() const noexcept { return begin_; }
+    iterator end() noexcept { return end_; }
+    const_iterator end() const noexcept { return end_; }
 
     // --- modifiers ----------------------------------------------------------
-    void push_back(const T& value) {
+    void push_back(const_reference value) {
         if (end_ == cap_) grow();
         ::new (static_cast<void*>(end_)) T(value);
         end_++;
     }
-    void push_back(T&& value) {
+    void push_back(value_type&& value) {
         if (end_ == cap_) grow();
         ::new (static_cast<void*>(end_)) T(neko::move(value));
         end_++;
     }
 
     template <typename... Args>
-    T& emplace_back(Args&&... args) {
+    reference emplace_back(Args&&... args) {
         if (end_ == cap_) grow();
         ::new (static_cast<void*>(end_)) T(neko::forward<Args>(args)...);
         end_++;
@@ -155,12 +153,12 @@ public:
         destroyRange(begin_, end_);
         end_ = begin_;
     }
-    void resize(std::size_t count) {
+    void resize(size_type count) {
         if (count == size()) return;
         while (count < size()) pop_back();
         if (count > size()) {
             if (count > capacity()) reallocate(count);
-            T* p = end_;
+            pointer p = end_;
             try {
                 for (; p != begin_ + count; ++p) new (p) T();
             } catch (...) {
@@ -170,12 +168,12 @@ public:
             end_ = p;
         }
     }
-    void resize(std::size_t count, const T& value) {
+    void resize(size_type count, const_reference value) {
         if (count == size()) return;
         while (count < size()) pop_back();
         if (count > size()) {
             if (count > capacity()) reallocate(count);
-            T* p = end_;
+            pointer p = end_;
             try {
                 for (; p != begin_ + count; ++p) new (p) T(value);
             } catch (...) {
@@ -186,25 +184,25 @@ public:
         }
     }
 
-    T* insert(const T* pos, const T& value) {
-        std::size_t i = pos - begin_;
+    iterator insert(const_iterator pos, const_reference value) {
+        size_type i = pos - begin_;
         if (end_ == cap_) grow();
 
         ::new (static_cast<void*>(end_)) T(value);
         end_++;
 
-        T* pos_ = begin_ + i;
-        T* it = end_ - 1;
+        iterator pos_ = begin_ + i;
+        iterator it = end_ - 1;
         while (pos_ != it) {
             std::swap(*(it - 1), *it);
             it--;
         }
         return pos_;
     }
-    T* erase(const T* pos) {
-        std::size_t i = pos - begin_;
+    iterator erase(const_iterator pos) {
+        size_type i = pos - begin_;
 
-        T* it = begin_ + i;
+        iterator it = begin_ + i;
         while (it + 1 != end_) {
             std::swap(*it, *(it + 1));
             it++;
@@ -213,11 +211,11 @@ public:
         pop_back();
         return begin_ + i;
     }
-    T* erase(const T* first, const T* last) {
-        std::size_t f = first - begin_, l = last - begin_;
+    iterator erase(const_iterator first, const_iterator last) {
+        size_type f = first - begin_, l = last - begin_;
         if (first == last) return begin_ + f;
 
-        T* it = begin_ + f;
+        iterator it = begin_ + f;
         while (it + l - f != end_) {
             std::swap(*it, *(it + l - f));
             it++;
@@ -234,32 +232,32 @@ public:
     }
 
 private:
-    T* begin_ = nullptr;
-    T* end_ = nullptr;
-    T* cap_ = nullptr;
+    pointer begin_ = nullptr;
+    pointer end_ = nullptr;
+    pointer cap_ = nullptr;
 
-    static T* allocate(std::size_t n) {
-        return static_cast<T*>(::operator new(n * sizeof(T)));
+    static pointer allocate(size_type n) {
+        return static_cast<pointer>(::operator new(n * sizeof(T)));
     }
-    static void deallocate(T* p) { ::operator delete(p); }
+    static void deallocate(pointer p) { ::operator delete(p); }
 
-    void init(std::size_t count) {
+    void init(size_type count) {
         begin_ = allocate(count);
         end_ = begin_;
         cap_ = begin_ + count;
     }
 
-    void reallocate(std::size_t new_cap) {
-        T* new_begin_ = allocate(new_cap);
-        T* new_end_ = new_begin_;
-        T* new_cap_ = new_begin_ + new_cap;
+    void reallocate(size_type new_cap) {
+        pointer new_begin_ = allocate(new_cap);
+        pointer new_end_ = new_begin_;
+        pointer new_cap_ = new_begin_ + new_cap;
         try {
-            for (; std::size_t(new_end_ - new_begin_) < size(); ++new_end_) {
+            for (; size_type(new_end_ - new_begin_) < size(); ++new_end_) {
                 new (new_end_) T(neko::move_if_noexcept(
                     *(begin_ + (new_end_ - new_begin_))));
             }
         } catch (...) {
-            T* it = new_end_;
+            pointer it = new_end_;
             while (it != new_begin_) {
                 it--;
                 it->~T();
@@ -273,9 +271,9 @@ private:
         cap_ = neko::exchange(new_cap_, nullptr);
     }
 
-    void destroyRange(const T* first, const T* last) {
-        std::size_t f = first - begin_, l = last - begin_;
-        for (T* it = begin_ + f; it != begin_ + l; it++) {
+    void destroyRange(const_pointer first, const_pointer last) {
+        size_type f = first - begin_, l = last - begin_;
+        for (pointer it = begin_ + f; it != begin_ + l; it++) {
             it->~T();
         }
     }
@@ -286,7 +284,7 @@ private:
     }
 
     void grow() {
-        std::size_t new_cap = cap_ == nullptr ? 1 : capacity() * 2;
+        size_type new_cap = cap_ == nullptr ? 1 : capacity() * 2;
         reallocate(new_cap);
     }
 };
@@ -294,7 +292,7 @@ private:
 template <typename T>
 bool operator==(const vector<T>& a, const vector<T>& b) {
     if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i) {
+    for (typename vector<T>::size_type i = 0; i < a.size(); ++i) {
         if (*(a.begin() + i) != *(b.begin() + i)) return false;
     }
     return true;
