@@ -64,8 +64,26 @@ if [[ "$MODULE" == "fmt" ]]; then
     exit 0
 fi
 
-if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+# The set of test targets is a glob, so it changes under us every time a branch
+# switch swaps one module's test file for another's. CONFIGURE_DEPENDS re-runs
+# that glob, but only as a prerequisite of a target that is already in the
+# generated build system -- and `./t deque` asks make for test_deque by name,
+# which a stale build system cannot even parse. So look for the drift out here,
+# where nothing has to exist first.
+test_sources() { printf '%s\n' tests/test_*.cpp | sort; }
+
+STAMP="$BUILD_DIR/.neko-test-sources"
+if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]] || ! test_sources | cmp -s - "$STAMP"; then
     cmake -S . -B "$BUILD_DIR" "${CMAKE_ARGS[@]}" > /dev/null || exit 1
+    # Re-configuring drops the departed targets but leaves their executables
+    # sitting in the build tree for the run loop to find. Those were built
+    # against headers this branch does not have; passing green is the worst
+    # thing they could do.
+    for bin in "$BUILD_DIR"/tests/test_*; do
+        [[ -f "$bin" ]] || continue
+        [[ -f "tests/$(basename "$bin").cpp" ]] || rm -f "$bin"
+    done
+    test_sources > "$STAMP"
 fi
 
 # Report leaks *and* keep going to the end of the run, so one bad test does not
@@ -88,11 +106,16 @@ fi
 
 cmake --build "$BUILD_DIR" -j || exit 1
 
+# Driven by the sources, not by whatever executables happen to be lying in the
+# build tree, so a leftover from another branch can never join the run.
 status=0
-for bin in "$BUILD_DIR"/tests/test_*; do
+for src in tests/test_*.cpp; do
+    name="$(basename "$src" .cpp)"
+    [[ "$name" == "test_main" ]] && continue
+    bin="$BUILD_DIR/tests/$name"
     [[ -x "$bin" && -f "$bin" ]] || continue
     echo
-    echo "=== $(basename "$bin") ==="
+    echo "=== $name ==="
     "$bin" || status=1
 done
 exit $status
