@@ -12,6 +12,41 @@ namespace {
 
 using neko_test::Tracker;
 
+// A deque's storage, assembled by hand: three blocks, and a map pointing at
+// them. This is everything the iterator needs -- it never asks the container
+// for anything -- so the tests in section 1 below can run before
+// initialise_map, push_back or begin() exist.
+template <typename T>
+struct ManualMap {
+    static constexpr std::size_t block_size = neko::deque_block_size<T>();
+    static constexpr std::size_t blocks = 3;
+
+    T storage[blocks][block_size];
+    T* map[blocks];
+
+    ManualMap() {
+        for (std::size_t b = 0; b < blocks; ++b) map[b] = storage[b];
+    }
+
+    // An iterator onto element `off` of block `b`: set_node picks the block,
+    // then cur walks to the offset. That is exactly how begin() and end() will
+    // position one once they exist.
+    neko::deque_iterator<T, T&, T*> iter(std::size_t b, std::size_t off = 0) {
+        neko::deque_iterator<T, T&, T*> it;
+        it.set_node(&map[b]);
+        it.cur = it.first + off;
+        return it;
+    }
+};
+
+// Number every slot with its position in the whole sequence, so an element's
+// value alone says which block it is in and where.
+void number(ManualMap<int>& m) {
+    for (std::size_t b = 0; b < m.blocks; ++b)
+        for (std::size_t i = 0; i < m.block_size; ++i)
+            m.storage[b][i] = static_cast<int>(b * m.block_size + i);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -51,6 +86,429 @@ NEKO_TEST(block_size_is_at_least_one_element) {
     };
     STATIC_CHECK(neko::deque_block_size<int>() > 1);
     STATIC_CHECK(neko::deque_block_size<Huge>() == 1);
+}
+
+// ---------------------------------------------------------------------------
+// 1b. The iterator, built by hand
+//
+// No container anywhere below: every iterator is positioned directly on a map
+// the test owns. These are the first tests in the file that can go green, and
+// they need only set_node, operator*, operator->, ++ and --.
+//
+// One rule for the hand-built map: never ++ past the last element of the last
+// block. A real deque always has a slot for end() to denote, but this map is
+// exactly full, so going one further would call set_node on a map entry that
+// does not exist.
+// ---------------------------------------------------------------------------
+
+NEKO_TEST(set_node_adopts_the_whole_block) {
+    ManualMap<int> m;
+    neko::deque_iterator<int, int&, int*> it;
+    it.set_node(&m.map[1]);
+
+    CHECK_EQ(it.node, &m.map[1]);
+    CHECK_EQ(it.first, m.map[1]);
+    CHECK_EQ(it.last, m.map[1] + m.block_size);    // one PAST the block
+    CHECK_EQ(it.cur, static_cast<int*>(nullptr));  // cur is the caller's job
+}
+
+NEKO_TEST(dereference_yields_the_element_at_cur) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(2, 5);
+    CHECK_EQ(*it, static_cast<int>(2 * m.block_size + 5));
+}
+
+NEKO_TEST(arrow_reaches_a_member_of_the_element) {
+    ManualMap<Tracker> m;
+    m.storage[0][3].value = 42;
+
+    auto it = m.iter(0, 3);
+    CHECK_EQ(it->value, 42);
+    CHECK_EQ((*it).value, 42);  // the equivalence -> is required to provide
+}
+
+NEKO_TEST(increment_walks_forward_inside_a_block) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(0, 0);
+    ++it;
+    CHECK_EQ(*it, 1);
+    CHECK_EQ(it.node, &m.map[0]);  // no hop: same block
+}
+
+NEKO_TEST(increment_hops_to_the_next_block_at_the_boundary) {
+    ManualMap<int> m;
+    number(m);
+
+    // The last element of block 0. One ++ has to cross into block 1, which is
+    // somewhere else in memory entirely -- the case a bare T* cannot handle,
+    // and the reason this iterator exists at all.
+    auto it = m.iter(0, m.block_size - 1);
+    REQUIRE_EQ(*it, static_cast<int>(m.block_size - 1));
+
+    ++it;
+    CHECK_EQ(it.node, &m.map[1]);
+    CHECK_EQ(it.cur, m.map[1]);
+    CHECK_EQ(*it, static_cast<int>(m.block_size));
+}
+
+NEKO_TEST(decrement_hops_to_the_previous_block_at_the_boundary) {
+    ManualMap<int> m;
+    number(m);
+
+    // Mirror image: from the first element of block 1, one -- lands on the
+    // LAST element of block 0, not the first.
+    auto it = m.iter(1, 0);
+    --it;
+    CHECK_EQ(it.node, &m.map[0]);
+    CHECK_EQ(it.cur, m.map[0] + m.block_size - 1);
+    CHECK_EQ(*it, static_cast<int>(m.block_size - 1));
+}
+
+NEKO_TEST(increment_and_decrement_undo_each_other_across_a_boundary) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(0, m.block_size - 1);
+    auto before = it;
+    ++it;
+    --it;
+
+    // node as well as cur: operator== only compares cur, so an iterator that
+    // hopped forward and left node pointing at the new block would still
+    // compare equal here -- and then break on the very next ++.
+    CHECK_EQ(it.cur, before.cur);
+    CHECK_EQ(it.node, before.node);
+    CHECK_EQ(it.first, before.first);
+    CHECK_EQ(it.last, before.last);
+}
+
+NEKO_TEST(postfix_increment_returns_the_position_it_left) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(0, m.block_size - 1);
+    auto old = it++;
+
+    CHECK_EQ(*old, static_cast<int>(m.block_size - 1));  // where it was
+    CHECK_EQ(*it, static_cast<int>(m.block_size));       // where it is now
+    CHECK_EQ(old.node, &m.map[0]);  // the copy kept the old block too
+}
+
+NEKO_TEST(postfix_decrement_returns_the_position_it_left) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(1, 0);
+    auto old = it--;
+
+    CHECK_EQ(*old, static_cast<int>(m.block_size));
+    CHECK_EQ(*it, static_cast<int>(m.block_size - 1));
+    CHECK_EQ(old.node, &m.map[1]);
+}
+
+NEKO_TEST(incrementing_visits_every_element_of_every_block_in_order) {
+    ManualMap<int> m;
+    number(m);
+    const int n = static_cast<int>(m.blocks * m.block_size);
+
+    auto it = m.iter(0, 0);
+    for (int i = 0; i < n - 1; ++i) {  // stop ON the last one, see the note
+        REQUIRE_EQ(*it, i);
+        ++it;
+    }
+    CHECK_EQ(*it, n - 1);
+    CHECK_EQ(it.node, &m.map[m.blocks - 1]);
+}
+
+NEKO_TEST(decrementing_visits_every_element_of_every_block_in_reverse) {
+    ManualMap<int> m;
+    number(m);
+    const int n = static_cast<int>(m.blocks * m.block_size);
+
+    auto it = m.iter(m.blocks - 1, m.block_size - 1);
+    for (int i = n - 1; i > 0; --i) {
+        REQUIRE_EQ(*it, i);
+        --it;
+    }
+    CHECK_EQ(*it, 0);
+    CHECK_EQ(it.node, &m.map[0]);
+}
+
+NEKO_TEST(a_hand_built_iterator_converts_to_a_const_iterator) {
+    ManualMap<int> m;
+    number(m);
+
+    // The runtime half of iterator_converts_to_const_iterator_but_not_back,
+    // which only checks the conversion exists.
+    neko::deque<int>::const_iterator cit = m.iter(1, 2);
+    STATIC_CHECK(neko::is_same_v<decltype(*cit), const int&>);
+    CHECK_EQ(*cit, static_cast<int>(m.block_size + 2));
+}
+
+// ---------------------------------------------------------------------------
+// 1c. Iterator arithmetic, still on the hand-built map
+//
+// ++ and -- only ever cross one boundary, and they find it by comparing a
+// pointer against `last`. operator+= cannot work that way: n may be any
+// distance in either direction, so it has to *compute* which block it lands
+// in and re-bind first/last to that block. Every test below is a case where
+// that computation can go wrong while stepping stays right.
+//
+// Section 1b's rule still holds -- the map is exactly full, so nothing here
+// may land past the last element of block 2 or before the first of block 0.
+// ---------------------------------------------------------------------------
+
+NEKO_TEST(a_default_constructed_iterator_holds_no_position) {
+    neko::deque<int>::iterator it;
+    CHECK_EQ(it.cur, static_cast<int*>(nullptr));
+    CHECK_EQ(it.node, static_cast<int**>(nullptr));
+    CHECK(it == neko::deque<int>::iterator{});
+}
+
+NEKO_TEST(plus_equals_stays_put_for_a_jump_of_zero) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(1, 4);
+    it += 0;
+    CHECK_EQ(it.node, &m.map[1]);
+    CHECK_EQ(*it, static_cast<int>(m.block_size + 4));
+}
+
+NEKO_TEST(plus_equals_moves_within_a_block_without_touching_the_node) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(1, 2);
+    it += 3;
+    CHECK_EQ(it.node, &m.map[1]);  // the cheap path: no map lookup at all
+    CHECK_EQ(it.cur, m.map[1] + 5);
+    CHECK_EQ(*it, static_cast<int>(m.block_size + 5));
+}
+
+NEKO_TEST(plus_equals_of_exactly_one_block_lands_on_the_next_block) {
+    ManualMap<int> m;
+    number(m);
+
+    // The boundary: offset == block_size is the smallest offset that is NOT
+    // in this block, so it has to hop -- and land on slot 0 of the block
+    // after, not slot block_size of anything.
+    auto it = m.iter(0, 0);
+    it += static_cast<std::ptrdiff_t>(m.block_size);
+    CHECK_EQ(it.node, &m.map[1]);
+    CHECK_EQ(it.cur, m.map[1]);
+    CHECK_EQ(*it, static_cast<int>(m.block_size));
+}
+
+NEKO_TEST(plus_equals_crosses_more_than_one_block_in_one_step) {
+    ManualMap<int> m;
+    number(m);
+
+    // Two whole blocks in a single O(1) operation -- the thing ++ in a loop
+    // cannot do, and the reason += exists rather than being sugar for it.
+    auto it = m.iter(0, 3);
+    it += static_cast<std::ptrdiff_t>(2 * m.block_size);
+    CHECK_EQ(it.node, &m.map[2]);
+    CHECK_EQ(it.cur, m.map[2] + 3);
+    CHECK_EQ(*it, static_cast<int>(2 * m.block_size + 3));
+}
+
+NEKO_TEST(plus_equals_accepts_a_negative_distance) {
+    ManualMap<int> m;
+    number(m);
+
+    // += and -= are one operation with a sign, and the sign is precisely
+    // where truncating integer division goes the wrong way.
+    auto it = m.iter(2, 5);
+    it += -static_cast<std::ptrdiff_t>(m.block_size + 5);
+    CHECK_EQ(it.node, &m.map[1]);
+    CHECK_EQ(it.cur, m.map[1]);
+    CHECK_EQ(*it, static_cast<int>(m.block_size));
+}
+
+NEKO_TEST(minus_equals_crosses_backwards_with_a_remainder) {
+    ManualMap<int> m;
+    number(m);
+
+    // Lands part-way into an earlier block, so the offset is negative and not
+    // a multiple of block_size. -1 / block_size truncates towards zero and
+    // gives 0, which leaves the iterator a whole block too high unless the
+    // division is corrected for the sign.
+    auto it = m.iter(2, 1);
+    it -= static_cast<std::ptrdiff_t>(m.block_size + 3);
+    CHECK_EQ(it.node, &m.map[0]);
+    CHECK_EQ(it.cur, m.map[0] + m.block_size - 2);
+    CHECK_EQ(*it, static_cast<int>(m.block_size - 2));
+}
+
+NEKO_TEST(minus_equals_of_one_matches_a_single_decrement) {
+    ManualMap<int> m;
+    number(m);
+
+    // The likeliest off-by-one there is: -= 1 from the first slot of a block
+    // must land on the LAST slot of the block before, exactly where -- goes.
+    auto by_jump = m.iter(1, 0);
+    by_jump -= 1;
+    auto by_step = m.iter(1, 0);
+    --by_step;
+
+    CHECK_EQ(by_jump.cur, by_step.cur);
+    CHECK_EQ(by_jump.node, by_step.node);
+    CHECK_EQ(*by_jump, static_cast<int>(m.block_size - 1));
+}
+
+NEKO_TEST(plus_and_minus_leave_the_original_iterator_alone) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(1, 0);
+    auto ahead = it + static_cast<std::ptrdiff_t>(m.block_size);
+    auto behind = it - 1;
+
+    CHECK_EQ(it.cur, m.map[1]);  // unmoved: these return a copy
+    CHECK_EQ(it.node, &m.map[1]);
+    CHECK_EQ(*ahead, static_cast<int>(2 * m.block_size));
+    CHECK_EQ(*behind, static_cast<int>(m.block_size - 1));
+}
+
+NEKO_TEST(jumping_forward_agrees_with_stepping_for_every_distance) {
+    ManualMap<int> m;
+    number(m);
+    const std::ptrdiff_t n =
+        static_cast<std::ptrdiff_t>(m.blocks * m.block_size);
+
+    // The exhaustive version: from the front, `it + k` must be the same
+    // iterator as k increments, for every k the map can hold. One loop
+    // covers every combination of whole blocks and remainder.
+    const auto base = m.iter(0, 0);
+    auto stepped = base;
+    for (std::ptrdiff_t k = 0; k < n; ++k) {
+        const auto jumped = base + k;
+        REQUIRE_EQ(jumped.cur, stepped.cur);
+        REQUIRE_EQ(jumped.node, stepped.node);
+        REQUIRE_EQ(jumped.first, stepped.first);  // a hop that lands right but
+        REQUIRE_EQ(jumped.last, stepped.last);    // forgets to re-bind is a
+        if (k + 1 < n) ++stepped;                 // bug the next ++ pays for
+    }
+}
+
+NEKO_TEST(jumping_backward_agrees_with_stepping_for_every_distance) {
+    ManualMap<int> m;
+    number(m);
+    const std::ptrdiff_t n =
+        static_cast<std::ptrdiff_t>(m.blocks * m.block_size);
+
+    const auto base = m.iter(m.blocks - 1, m.block_size - 1);
+    auto stepped = base;
+    for (std::ptrdiff_t k = 0; k < n; ++k) {
+        const auto jumped = base - k;
+        REQUIRE_EQ(jumped.cur, stepped.cur);
+        REQUIRE_EQ(jumped.node, stepped.node);
+        REQUIRE_EQ(jumped.first, stepped.first);
+        REQUIRE_EQ(jumped.last, stepped.last);
+        if (k + 1 < n) --stepped;
+    }
+}
+
+NEKO_TEST(an_iterator_reached_by_jumping_can_still_be_stepped) {
+    ManualMap<int> m;
+    number(m);
+
+    // A jump onto the last slot of a block. If += wrote cur without going
+    // through set_node, ++ here compares cur against the *old* block's `last`,
+    // never matches, and walks off the end of block 1 instead of hopping.
+    auto it = m.iter(0, 0);
+    it += static_cast<std::ptrdiff_t>(2 * m.block_size - 1);
+    REQUIRE_EQ(*it, static_cast<int>(2 * m.block_size - 1));
+
+    ++it;
+    CHECK_EQ(it.node, &m.map[2]);
+    CHECK_EQ(it.cur, m.map[2]);
+    CHECK_EQ(*it, static_cast<int>(2 * m.block_size));
+}
+
+NEKO_TEST(subscript_reads_an_element_without_moving_the_iterator) {
+    ManualMap<int> m;
+    number(m);
+
+    auto it = m.iter(1, 0);
+    CHECK_EQ(it[0], static_cast<int>(m.block_size));
+    CHECK_EQ(it[3], static_cast<int>(m.block_size + 3));
+    CHECK_EQ(it[-1], static_cast<int>(m.block_size - 1));  // back a block
+    CHECK_EQ(it[static_cast<std::ptrdiff_t>(m.block_size)],
+             static_cast<int>(2 * m.block_size));  // forward a whole block
+    CHECK_EQ(it.cur, m.map[1]);                    // and still where it was
+}
+
+NEKO_TEST(subscript_yields_a_reference_that_writes_through) {
+    ManualMap<int> m;
+    number(m);
+
+    // A reference to the element, not a copy of it and not the pointer to it:
+    // assigning through the subscript has to reach into the block.
+    auto it = m.iter(0, 0);
+    STATIC_CHECK(neko::is_same_v<decltype(it[0]), int&>);
+    it[static_cast<std::ptrdiff_t>(m.block_size) + 2] = 99;
+    CHECK_EQ(m.storage[1][2], 99);
+}
+
+NEKO_TEST(equality_compares_position_not_the_route_taken) {
+    ManualMap<int> m;
+    number(m);
+
+    auto stepped = m.iter(0, m.block_size - 1);
+    ++stepped;                   // arrived at block 1 by hopping
+    auto placed = m.iter(1, 0);  // put there directly
+
+    CHECK(stepped == placed);
+    CHECK(!(stepped != placed));
+
+    ++placed;
+    CHECK(stepped != placed);
+    CHECK(!(stepped == placed));
+}
+
+NEKO_TEST(ordering_follows_the_sequence_across_blocks) {
+    ManualMap<int> m;
+    number(m);
+
+    // Within a block the elements are adjacent, so cur alone orders them.
+    // Across blocks they need not be -- block 1 may sit below block 0 in
+    // memory -- so the node is what decides, and cur is only the tie-break.
+    const auto early = m.iter(0, 3);
+    const auto late_same_block = m.iter(0, 7);
+    const auto next_block = m.iter(1, 0);
+
+    CHECK(early < late_same_block);
+    CHECK(!(late_same_block < early));
+    CHECK(late_same_block < next_block);
+    CHECK(!(next_block < late_same_block));
+    CHECK(!(early < early));  // irreflexive
+}
+
+NEKO_TEST(a_const_iterator_does_the_same_arithmetic) {
+    ManualMap<int> m;
+    number(m);
+
+    // One class body serves both, so the arithmetic is shared code -- but the
+    // Ref/Ptr substitution and the converting constructor are not, and those
+    // are the whole of what const_iterator adds.
+    using CIt = neko::deque<int>::const_iterator;
+    CIt cit = m.iter(0, 1);
+
+    cit += static_cast<std::ptrdiff_t>(m.block_size);
+    CHECK_EQ(*cit, static_cast<int>(m.block_size + 1));
+
+    STATIC_CHECK(neko::is_same_v<decltype(cit[0]), const int&>);
+    CHECK_EQ(cit[1], static_cast<int>(m.block_size + 2));
+
+    cit -= 2;
+    CHECK_EQ(*cit, static_cast<int>(m.block_size - 1));
+    CHECK(cit < CIt(m.iter(1, 0)));
 }
 
 // ---------------------------------------------------------------------------

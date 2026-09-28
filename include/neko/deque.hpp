@@ -97,40 +97,103 @@ struct deque_iterator {
 
     deque_iterator() = default;
 
-    // The conversion that makes `const_iterator it = d.begin();` work while
-    // the reverse stays a compile error. Deliberately not explicit.
-    deque_iterator(const deque_iterator<T, T&, T*>& other)
+    deque_iterator(const self<T, T&, T*>& other)
         : cur(other.cur),
           first(other.first),
           last(other.last),
           node(other.node) {}
 
-    // Re-point at the block held in map entry n, leaving cur to the caller.
-    // Every operation that crosses a block boundary goes through here.
-    void set_node(T** n) { NEKO_TODO(); }
+    void set_node(T** n) {
+        node = n;
+        first = *n;
+        last = first + deque_block_size<T>();
+    }
 
-    reference operator*() const { NEKO_TODO(); }
-    pointer operator->() const { NEKO_TODO(); }
+    Ref operator*() const {
+        return *cur;
+    }
+    Ptr operator->() const {
+        return cur;
+    }
 
-    self& operator++() { NEKO_TODO(); }
-    self operator++(int) { NEKO_TODO(); }
-    self& operator--() { NEKO_TODO(); }
-    self operator--(int) { NEKO_TODO(); }
+    self& operator++() {
+        if (++cur == last) {
+            set_node(node + 1);
+            cur = first;
+        }
+        return *this;
+    }
+    self operator++(int) {
+        self temp = *this;
+        if (++cur == last) {
+            set_node(node + 1);
+            cur = first;
+        }
+        return temp;
+    }
+    self& operator--() {
+        if (cur-- == first) {
+            set_node(node - 1);
+            cur = last - 1;
+        }
+        return *this;
+    }
+    self operator--(int) {
+        self temp = *this;
+        if (cur-- == first) {
+            set_node(node - 1);
+            cur = last - 1;
+        }
+        return temp;
+    }
 
-    // The one that is genuinely fiddly. n may be negative, and the target may
-    // be any number of blocks away, so this cannot be a loop over ++ if it is
-    // to stay O(1). Work out the offset from `first`, then divide and modulo
-    // by block_size -- taking care that C++ integer division truncates towards
-    // zero, which is the wrong direction for a negative offset.
-    self& operator+=(difference_type n) { NEKO_TODO(); }
-    self& operator-=(difference_type n) { NEKO_TODO(); }
-    self operator+(difference_type n) const { NEKO_TODO(); }
-    self operator-(difference_type n) const { NEKO_TODO(); }
-    reference operator[](difference_type n) const { NEKO_TODO(); }
+    self& operator+=(difference_type n) {
+        const difference_type bsize = deque_block_size<T>();
+        const difference_type offset = n + (cur - first);
+        
+        if (offset >= 0 && offset < bsize) {
+            cur = first + offset;
+        } else {
+            const difference_type node_offset = offset >= 0
+                    ? offset / bsize
+                    : (offset + 1) / bsize - 1;
+            set_node(node + node_offset);
+            cur = first + (offset - node_offset * bsize);
+        }
+        return *this;
+    }
+    self& operator-=(difference_type n) {
+        *this += -n;
+        return *this;
+    }
+    self operator+(difference_type n) const {
+        self temp = *this;
+        temp += n;
+        return temp;
+    }
+    self operator-(difference_type n) const {
+        return *this + (-n);
+    }
+    Ref operator[](difference_type n) const {
+        return *(*this + n).cur;
+    }
 
-    // Distance between two iterators: whole blocks between the nodes, plus the
-    // partial block at each end.
-    difference_type operator-(const self& other) const { NEKO_TODO(); }
+    difference_type operator-(const self& other) const {
+        if (node == other.node) {
+            return cur - other.cur;
+        }
+
+        const difference_type bsize = deque_block_size<T>();
+        const difference_type node_offset = node - other.node;
+        if (node_offset < 0) {
+            return - (other - *this);
+        }
+
+        const difference_type first_part = last - cur;
+        const difference_type mid_part = (node_offset - 1) * bsize;
+        const difference_type last_part = other.cur - other.first;
+        return first_part + mid_part + last_part;
+    }
 
     bool operator==(const self& other) const { return cur == other.cur; }
     bool operator!=(const self& other) const { return cur != other.cur; }
@@ -161,22 +224,22 @@ public:
     // the price of push_front and push_back both being O(1) with no branch for
     // "no blocks yet".
     deque() { NEKO_TODO(); }
-    explicit deque(size_type count) { NEKO_TODO(); }
-    deque(size_type count, const T& value) { NEKO_TODO(); }
+    explicit deque(size_type /*count*/) { NEKO_TODO(); }
+    deque(size_type /*count*/, const T& /*value*/) { NEKO_TODO(); }
 
-    deque(const deque& other) { NEKO_TODO(); }
-    deque(deque&& other) { NEKO_TODO(); }
-    deque& operator=(const deque& other) { NEKO_TODO(); }
-    deque& operator=(deque&& other) { NEKO_TODO(); }
+    deque(const deque& /*other*/) { NEKO_TODO(); }
+    deque(deque&& /*other*/) { NEKO_TODO(); }
+    deque& operator=(const deque& /*other*/) { NEKO_TODO(); }
+    deque& operator=(deque&& /*other*/) { NEKO_TODO(); }
     ~deque() {}  // destroy every element, then free every block, then the map
 
     // --- element access ----------------------------------------------------
     // Both are O(1). operator[] is iterator arithmetic, not a single add --
     // this is where the cost of the block layout actually shows up.
-    reference operator[](size_type i) { NEKO_TODO(); }
-    const_reference operator[](size_type i) const { NEKO_TODO(); }
-    reference at(size_type i) { NEKO_TODO(); }
-    const_reference at(size_type i) const { NEKO_TODO(); }
+    reference operator[](size_type /*i*/) { NEKO_TODO(); }
+    const_reference operator[](size_type /*i*/) const { NEKO_TODO(); }
+    reference at(size_type /*i*/) { NEKO_TODO(); }
+    const_reference at(size_type /*i*/) const { NEKO_TODO(); }
 
     reference front() { NEKO_TODO(); }
     const_reference front() const { NEKO_TODO(); }
@@ -204,17 +267,17 @@ public:
     // --- modifiers ---------------------------------------------------------
     // The pair that justifies the whole container. Each is O(1) amortised and
     // leaves every existing element at the same address.
-    void push_back(const T& value) { NEKO_TODO(); }
-    void push_back(T&& value) { NEKO_TODO(); }
-    void push_front(const T& value) { NEKO_TODO(); }
-    void push_front(T&& value) { NEKO_TODO(); }
+    void push_back(const T& /*value*/) { NEKO_TODO(); }
+    void push_back(T&& /*value*/) { NEKO_TODO(); }
+    void push_front(const T& /*value*/) { NEKO_TODO(); }
+    void push_front(T&& /*value*/) { NEKO_TODO(); }
 
     template <typename... Args>
-    reference emplace_back(Args&&... args) {
+    reference emplace_back(Args&&... /*args*/) {
         NEKO_TODO();
     }
     template <typename... Args>
-    reference emplace_front(Args&&... args) {
+    reference emplace_front(Args&&... /*args*/) {
         NEKO_TODO();
     }
 
@@ -226,7 +289,7 @@ public:
     // O(1) and noexcept: three scalars change hands and not one element moves.
     // Contrast array::swap, which is O(N) because an array owns its storage
     // directly.
-    void swap(deque& other) { NEKO_TODO(); }
+    void swap(deque& /*other*/) { NEKO_TODO(); }
 
 private:
     // map_ is itself a dynamically sized array of block pointers. When it
@@ -239,7 +302,9 @@ private:
 
     // Suggested helpers. Writing these first makes the public members short:
     //
-    //   T* allocate_block()             one block of raw storage
+    T* allocate_block() {
+
+    }
     //   void deallocate_block(T*)
     //   void initialise_map(size_type)  map + enough blocks for n elements
     //   void reserve_map_at_back(n)     grow/re-centre the map if needed
